@@ -1,0 +1,468 @@
+{% verbatim %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solar Clock</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>☀️</text></svg>">
+<style>
+  :root { --size: min(17.5vw, 40vh); }
+  body.nosec { --size: min(26vw, 40vh); }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+
+  body {
+    background: radial-gradient(ellipse at 50% 55%, var(--bg1), var(--bg2));
+    color: var(--fg);
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    cursor: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  body.active { cursor: default; }
+
+  /* ---------- Themes ---------- */
+  body[data-theme="solar"]  { --bg1:#2e1100; --bg2:#050200; --fg:#ffdf9a; --glow:rgba(255,140,30,.75); --accent:#ff9d2e; }
+  body[data-theme="neon"]   { --bg1:#1a0436; --bg2:#07010f; --fg:#fdeeff; --glow:rgba(255,45,149,.85); --accent:#00e5ff; }
+  body[data-theme="matrix"] { --bg1:#001a0a; --bg2:#000502; --fg:#c9ffdc; --glow:rgba(44,255,122,.85); --accent:#2cff7a; }
+  body[data-theme="aurora"] { --bg1:#07162a; --bg2:#02040c; --fg:#effff9; --glow:rgba(80,255,200,.65); --accent:#6ef0c8; }
+  body[data-theme="cosmos"] { --bg1:#0a1030; --bg2:#000000; --fg:#eef2ff; --glow:rgba(120,160,255,.7); --accent:#7aa2ff; }
+  body[data-theme="mono"]   { --bg1:#0b0b0b; --bg2:#000000; --fg:#ffffff; --glow:rgba(255,255,255,.18); --accent:#ffffff; }
+
+  #fx { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
+  .vignette {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,.6) 100%);
+  }
+
+  main {
+    position: relative; z-index: 2;
+    height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+
+  /* ---------- Clock ---------- */
+  #clock {
+    display: flex; align-items: center; justify-content: center;
+    font-size: var(--size);
+    font-weight: 300;
+    line-height: 1;
+    color: var(--fg);
+    text-shadow: 0 0 .06em var(--glow), 0 0 .25em var(--glow), 0 0 .7em var(--glow);
+    white-space: nowrap;
+  }
+  #clock .d { display: inline-block; width: .62em; text-align: center; }
+  #clock .c { display: inline-block; width: .3em; text-align: center; transform: translateY(-.06em);
+              animation: blink 1s ease-in-out infinite; }
+  #clock .ap { font-size: .2em; font-weight: 400; letter-spacing: .08em; margin-left: .5em;
+               align-self: flex-end; margin-bottom: .55em; opacity: .85; }
+  .pop { animation: pop .45s cubic-bezier(.2,.8,.2,1); }
+
+  @keyframes pop   { from { transform: translateY(-9%); opacity: .15; } to { transform: none; opacity: 1; } }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  /* ---------- Seconds bar ---------- */
+  .bar {
+    width: min(60vw, 900px); height: 4px; margin-top: 5vh;
+    background: rgba(255,255,255,.1); border-radius: 4px; overflow: hidden;
+  }
+  #fill { display: block; height: 100%; width: 0; border-radius: 4px;
+          background: var(--accent); box-shadow: 0 0 14px var(--accent); }
+
+  /* ---------- Overlays ---------- */
+  #toast {
+    position: fixed; z-index: 3; top: 5vh; left: 50%;
+    transform: translate(-50%, -10px);
+    padding: .55em 1.3em; border-radius: 999px;
+    background: rgba(0,0,0,.55); border: 1px solid var(--accent);
+    color: var(--fg); font-size: clamp(14px, 1.6vw, 22px); letter-spacing: .12em; text-transform: uppercase;
+    opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  #hint {
+    position: fixed; z-index: 3; bottom: 4vh; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 1.6em; flex-wrap: wrap; justify-content: center;
+    font-size: clamp(12px, 1.2vw, 17px); color: var(--fg); opacity: 0;
+    transition: opacity .6s; pointer-events: none; text-align: center;
+    padding: 0 4vw;
+  }
+  body.active #hint { opacity: .65; }
+  #hint b { color: var(--accent); font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #clock .c, .pop { animation: none; }
+  }
+</style>
+</head>
+<body data-theme="solar">
+  <canvas id="fx"></canvas>
+  <div class="vignette"></div>
+
+  <main>
+    <div id="clock" aria-label="Current time"></div>
+    <div class="bar"><i id="fill"></i></div>
+  </main>
+
+  <div id="toast"></div>
+  <div id="hint">
+    <span><b>Click</b> or <b>F</b> full screen (Esc exits)</span>
+    <span><b>T</b> / <b>&larr; &rarr;</b> theme</span>
+    <span><b>Space</b> 12 / 24 hour</span>
+    <span><b>S</b> seconds</span>
+  </div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (s) => document.querySelector(s);
+  const body = document.body;
+  const clockEl = $("#clock");
+  const fill = $("#fill");
+  const toast = $("#toast");
+  const cv = $("#fx");
+  const ctx = cv.getContext("2d");
+
+  const THEMES = [
+    { id: "solar",  name: "Solar" },
+    { id: "neon",   name: "Neon Drive" },
+    { id: "matrix", name: "Matrix" },
+    { id: "aurora", name: "Aurora" },
+    { id: "cosmos", name: "Cosmos" },
+    { id: "mono",   name: "Minimal" },
+  ];
+
+  /* ---------- Saved settings ---------- */
+  const KEY = "solar-clock-settings";
+  const state = { theme: 0, h24: true, seconds: true };
+  try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) {}
+  if (!Number.isInteger(state.theme) || state.theme < 0 || state.theme >= THEMES.length) state.theme = 0;
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} };
+
+  /* ---------- Toast ---------- */
+  let toastTimer;
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove("show"), 1600);
+  }
+
+  /* ---------- Clock rendering ---------- */
+  let cells = [];
+  let apEl = null;
+  let lastText = "";
+  const pad = (n) => String(n).padStart(2, "0");
+
+  function build(text) {
+    clockEl.textContent = "";
+    cells = [];
+    for (const ch of text) {
+      const s = document.createElement("span");
+      s.className = ch === ":" ? "c" : "d";
+      s.textContent = ch;
+      clockEl.appendChild(s);
+      cells.push(s);
+    }
+    apEl = document.createElement("span");
+    apEl.className = "ap";
+    clockEl.appendChild(apEl);
+  }
+
+  function render(now) {
+    let h = now.getHours();
+    let ap = "";
+    if (!state.h24) { ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12; }
+    const text = pad(h) + ":" + pad(now.getMinutes()) + (state.seconds ? ":" + pad(now.getSeconds()) : "");
+
+    if (text.length !== lastText.length) { build(text); lastText = ""; }
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] !== lastText[i]) {
+        const el = cells[i];
+        el.textContent = text[i];
+        if (el.classList.contains("d")) {
+          el.classList.remove("pop");
+          void el.offsetWidth;
+          el.classList.add("pop");
+        }
+      }
+    }
+    apEl.textContent = ap;
+    lastText = text;
+    document.title = text + (ap ? " " + ap : "");
+  }
+
+  /* ---------- Background effects ---------- */
+  let W = 0, H = 0;
+  let stars = [], embers = [], drops = [], cols = 0, lastRain = 0;
+  const FS = 18;
+  const rnd = (a, b) => a + Math.random() * (b - a);
+
+  function newStar(anywhere) {
+    return { x: rnd(-1, 1), y: rnd(-1, 1), z: anywhere ? rnd(0.05, 1) : rnd(0.7, 1), v: rnd(0.0015, 0.006) };
+  }
+
+  function initFx() {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.clearRect(0, 0, W, H);
+    embers = Array.from({ length: 70 }, () => ({
+      x: rnd(0, W), y: rnd(0, H), r: rnd(0.8, 2.6), v: rnd(0.25, 0.9), p: rnd(0, 6.28), a: rnd(0.25, 0.8),
+    }));
+    stars = Array.from({ length: 380 }, () => newStar(true));
+    cols = Math.ceil(W / FS);
+    drops = Array.from({ length: cols }, () => Math.floor(rnd(-40, 0)));
+    if (THEMES[state.theme].id === "matrix") {
+      ctx.fillStyle = "#000a05";
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    cv.width = Math.floor(W * dpr);
+    cv.height = Math.floor(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    initFx();
+  }
+
+  function fxSolar(t, dt) {
+    ctx.clearRect(0, 0, W, H);
+    const cx = W / 2, cy = H * 0.5, R = Math.max(W, H) * 0.55;
+    const pulse = 1 + 0.04 * Math.sin(t / 1800);
+
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * pulse);
+    g.addColorStop(0, "rgba(255,190,70,.30)");
+    g.addColorStop(0.35, "rgba(255,110,30,.14)");
+    g.addColorStop(1, "rgba(255,60,0,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(t / 40000);
+    const n = 18;
+    ctx.fillStyle = "rgba(255,170,60,.035)";
+    for (let i = 0; i < n; i++) {
+      ctx.rotate((Math.PI * 2) / n);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(R * 1.8, -R * 0.07);
+      ctx.lineTo(R * 1.8, R * 0.07);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+
+    for (const e of embers) {
+      e.y -= e.v * dt;
+      e.x += Math.sin(t / 1000 + e.p) * 0.3 * dt;
+      if (e.y < -10) { e.y = H + 10; e.x = rnd(0, W); }
+      ctx.fillStyle = "rgba(255," + Math.floor(150 + e.a * 80) + ",60," + e.a.toFixed(2) + ")";
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function fxNeon(t) {
+    ctx.clearRect(0, 0, W, H);
+    const horizon = H * 0.55;
+    const sr = Math.min(W, H) * 0.24;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, W, horizon);
+    ctx.clip();
+    const sg = ctx.createLinearGradient(0, horizon - sr * 2, 0, horizon);
+    sg.addColorStop(0, "#ffe14d");
+    sg.addColorStop(1, "#ff2d95");
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = sg;
+    ctx.beginPath();
+    ctx.arc(W / 2, horizon - sr * 0.9, sr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.strokeStyle = "rgba(255,45,149,.6)";
+    ctx.lineWidth = 1.2;
+    const lines = 14;
+    const offset = (t / 1000 * 0.5) % 1;
+    for (let i = 0; i < lines; i++) {
+      const p = (i + offset) / lines;
+      const y = horizon + (H - horizon) * p * p;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+    for (let i = -16; i <= 16; i++) {
+      ctx.beginPath();
+      ctx.moveTo(W / 2 + i * (W / 60), horizon);
+      ctx.lineTo(W / 2 + i * (W / 8), H);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = "rgba(0,229,255,.8)";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, horizon); ctx.lineTo(W, horizon); ctx.stroke();
+  }
+
+  function fxMatrix(t) {
+    if (t - lastRain < 55) return;
+    lastRain = t;
+    ctx.fillStyle = "rgba(0,10,4,.16)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.font = FS + "px monospace";
+    for (let i = 0; i < cols; i++) {
+      const ch = String.fromCharCode(0x30A0 + Math.floor(Math.random() * 96));
+      const y = drops[i] * FS;
+      ctx.fillStyle = Math.random() > 0.9 ? "#d6ffe4" : "#2cff7a";
+      ctx.fillText(ch, i * FS, y);
+      if (y > H && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+  }
+
+  const BLOBS = [
+    { c: "0,255,170",   p: 0.0, s: 1.0 },
+    { c: "140,90,255",  p: 2.1, s: 0.8 },
+    { c: "0,170,255",   p: 4.2, s: 1.2 },
+    { c: "255,80,200",  p: 5.5, s: 0.7 },
+  ];
+  function fxAurora(t) {
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "lighter";
+    const r = Math.max(W, H) * 0.45;
+    for (const b of BLOBS) {
+      const x = W * (0.5 + 0.35 * Math.sin(t / 9000 * b.s + b.p));
+      const y = H * (0.45 + 0.25 * Math.cos(t / 11000 * b.s + b.p * 1.7));
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, "rgba(" + b.c + ",.22)");
+      g.addColorStop(1, "rgba(" + b.c + ",0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  function fxCosmos(t, dt) {
+    ctx.clearRect(0, 0, W, H);
+    for (const s of stars) {
+      const pz = s.z;
+      s.z -= s.v * dt;
+      if (s.z <= 0.02) { Object.assign(s, newStar(false)); continue; }
+      const x = W / 2 + (s.x / s.z) * W * 0.5;
+      const y = H / 2 + (s.y / s.z) * H * 0.5;
+      if (x < 0 || x > W || y < 0 || y > H) { Object.assign(s, newStar(false)); continue; }
+      const px = W / 2 + (s.x / pz) * W * 0.5;
+      const py = H / 2 + (s.y / pz) * H * 0.5;
+      ctx.strokeStyle = "rgba(190,210,255," + (1 - s.z).toFixed(2) + ")";
+      ctx.lineWidth = 0.6 + (1 - s.z) * 1.8;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(x, y); ctx.stroke();
+    }
+  }
+
+  function drawFx(t, dt) {
+    switch (THEMES[state.theme].id) {
+      case "solar":  fxSolar(t, dt); break;
+      case "neon":   fxNeon(t); break;
+      case "matrix": fxMatrix(t); break;
+      case "aurora": fxAurora(t); break;
+      case "cosmos": fxCosmos(t, dt); break;
+      default: break;
+    }
+  }
+
+  /* ---------- Theme / settings ---------- */
+  function applyTheme(announce) {
+    const th = THEMES[state.theme];
+    body.dataset.theme = th.id;
+    initFx();
+    if (announce) showToast(th.name);
+  }
+
+  /* ---------- Main loop ---------- */
+  let lastSec = -1, lastT = 0;
+  function frame(t) {
+    const now = new Date();
+    const s = now.getSeconds();
+    if (s !== lastSec) { lastSec = s; render(now); }
+    fill.style.width = (((s + now.getMilliseconds() / 1000) / 60) * 100).toFixed(2) + "%";
+    const dt = Math.min(3, (t - lastT) / 16.667 || 1);
+    lastT = t;
+    drawFx(t, dt);
+    requestAnimationFrame(frame);
+  }
+
+  /* ---------- Fullscreen + keep screen awake ---------- */
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(() => {});
+  }
+
+  let lock = null;
+  async function keepAwake() {
+    try {
+      if ("wakeLock" in navigator && document.visibilityState === "visible" && !lock) {
+        lock = await navigator.wakeLock.request("screen");
+        lock.addEventListener("release", () => { lock = null; });
+      }
+    } catch (e) { /* not supported or denied */ }
+  }
+  document.addEventListener("visibilitychange", keepAwake);
+
+  /* ---------- Activity (show/hide hint + cursor) ---------- */
+  let idleTimer;
+  function wake(ms) {
+    body.classList.add("active");
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => body.classList.remove("active"), ms || 2500);
+  }
+  window.addEventListener("mousemove", () => wake());
+
+  /* ---------- Input ---------- */
+  document.addEventListener("click", () => { toggleFullscreen(); keepAwake(); });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key;
+    if (k === "f" || k === "F") {
+      toggleFullscreen();
+    } else if (k === "t" || k === "T" || k === "ArrowRight") {
+      state.theme = (state.theme + 1) % THEMES.length;
+      applyTheme(true); save();
+    } else if (k === "ArrowLeft") {
+      state.theme = (state.theme + THEMES.length - 1) % THEMES.length;
+      applyTheme(true); save();
+    } else if (k === " ") {
+      e.preventDefault();
+      state.h24 = !state.h24;
+      lastSec = -1; save();
+      showToast(state.h24 ? "24-hour" : "12-hour");
+    } else if (k === "s" || k === "S") {
+      state.seconds = !state.seconds;
+      body.classList.toggle("nosec", !state.seconds);
+      lastSec = -1; save();
+      showToast(state.seconds ? "Seconds on" : "Seconds off");
+    } else if (k === "?" || k === "h" || k === "H") {
+      wake(8000);
+      return;
+    } else {
+      return;
+    }
+    wake();
+  });
+
+  window.addEventListener("resize", resize);
+
+  /* ---------- Go ---------- */
+  body.classList.toggle("nosec", !state.seconds);
+  resize();
+  applyTheme(false);
+  keepAwake();
+  wake(7000);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
+{% endverbatim %}
